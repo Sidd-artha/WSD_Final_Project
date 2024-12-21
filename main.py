@@ -5,7 +5,6 @@ import sqlite3
 
 app = FastAPI()
 
-# Models for Customer, Item, and Order data
 class Customer(BaseModel):
     name: str
     phone: str
@@ -20,13 +19,11 @@ class Order(BaseModel):
     notes: str
     timestamp: int
 
-# Helper function to establish a database connection
 def establish_db_connection():
     database_connection = sqlite3.connect('db.sqlite', timeout=30, check_same_thread=False)
     database_connection.row_factory = sqlite3.Row
     return database_connection
 
-# Endpoint to create a new customer
 @app.post("/customers")
 def add_customer(customer: Customer, conn: sqlite3.Connection = Depends(establish_db_connection)):
     cursor = conn.cursor()
@@ -58,19 +55,6 @@ def retrieve_customer(id: int, conn: sqlite3.Connection = Depends(establish_db_c
     finally:
         conn.close()
 
-@app.get("/all_customers")
-def retrieve_all_customers(conn: sqlite3.Connection = Depends(establish_db_connection)):
-    cursor = conn.cursor()
-    try:
-        results = cursor.execute("SELECT * FROM customers").fetchall()
-        if not results:
-            raise HTTPException(status_code=404, detail="No customers found")
-        return {row["id"]: {"name": row["name"], "phone": row["phone"]} for row in results}
-    except sqlite3.OperationalError as error:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(error)}")
-    finally:
-        conn.close()
-
 @app.put("/customers/{id}")
 def modify_customer(id: int, customer: Customer, conn: sqlite3.Connection = Depends(establish_db_connection)):
     cursor = conn.cursor()
@@ -91,6 +75,10 @@ def modify_customer(id: int, customer: Customer, conn: sqlite3.Connection = Depe
 def remove_customer(id: int, conn: sqlite3.Connection = Depends(establish_db_connection)):
     cursor = conn.cursor()
     try:
+        dependent_orders = cursor.execute("SELECT COUNT(*) FROM orders WHERE customer_id = ?", (id,)).fetchone()[0]
+        if dependent_orders > 0:
+            raise HTTPException(status_code=400, detail="Cannot delete customer: associated orders exist")
+        
         cursor.execute("DELETE FROM customers WHERE id = ?", (id,))
         conn.commit()
         if cursor.rowcount == 0:
@@ -153,6 +141,10 @@ def modify_item(id: int, item: Item, conn: sqlite3.Connection = Depends(establis
 def remove_item(id: int, conn: sqlite3.Connection = Depends(establish_db_connection)):
     cursor = conn.cursor()
     try:
+        dependent_orders = cursor.execute("SELECT COUNT(*) FROM orders WHERE item_id = ?", (id,)).fetchone()[0]
+        if dependent_orders > 0:
+            raise HTTPException(status_code=400, detail="Cannot delete item: associated orders exist")
+        
         cursor.execute("DELETE FROM items WHERE id = ?", (id,))
         conn.commit()
         if cursor.rowcount == 0:
@@ -171,6 +163,14 @@ def add_order(order: Order, conn: sqlite3.Connection = Depends(establish_db_conn
     if not order.timestamp:
         order.timestamp = int(datetime.utcnow().timestamp())
     try:
+        customer_exists = cursor.execute("SELECT COUNT(*) FROM customers WHERE id = ?", (order.customer_id,)).fetchone()[0]
+        if customer_exists == 0:
+            raise HTTPException(status_code=400, detail="Invalid customer_id: Customer does not exist")
+        
+        item_exists = cursor.execute("SELECT COUNT(*) FROM items WHERE id = ?", (order.item_id,)).fetchone()[0]
+        if item_exists == 0:
+            raise HTTPException(status_code=400, detail="Invalid item_id: Item does not exist")
+        
         cursor.execute("INSERT INTO orders (customer_id, item_id, notes, timestamp) VALUES (?, ?, ?, ?)",
                        (order.customer_id, order.item_id, order.notes, order.timestamp))
         conn.commit()
@@ -204,6 +204,14 @@ def modify_order(id: int, order: Order, conn: sqlite3.Connection = Depends(estab
     if not order.timestamp:
         order.timestamp = int(datetime.utcnow().timestamp())
     try:
+        customer_exists = cursor.execute("SELECT COUNT(*) FROM customers WHERE id = ?", (order.customer_id,)).fetchone()[0]
+        if customer_exists == 0:
+            raise HTTPException(status_code=400, detail="Invalid customer_id: Customer does not exist")
+        
+        item_exists = cursor.execute("SELECT COUNT(*) FROM items WHERE id = ?", (order.item_id,)).fetchone()[0]
+        if item_exists == 0:
+            raise HTTPException(status_code=400, detail="Invalid item_id: Item does not exist")
+        
         cursor.execute("UPDATE orders SET customer_id = ?, item_id = ?, notes = ?, timestamp = ? WHERE id = ?",
                        (order.customer_id, order.item_id, order.notes, order.timestamp, id))
         conn.commit()
